@@ -6,7 +6,7 @@
 
 Stitch generates HTTP clients from C# interfaces. You define the shape, it writes the code.
 
-I built this because I got tired of HTTP client libraries that fail at runtime on mistakes you could have caught at compile time, and generate code you can never actually step through. The generated class shows up in Solution Explorer, you can navigate to it, you can set breakpoints in it. That was the main motivation.
+I built this because I got tired of HTTP client libraries that fail at runtime on mistakes you could have caught at compile time, and generate code you can never actually step through. The generated class shows up in Solution Explorer, you can open it, set a breakpoint in it, grep it. That's it, that's the whole pitch.
 
 ```csharp
 [StitchClient]
@@ -22,28 +22,19 @@ public interface IProductsApi
 
 ---
 
-## How is this different from Refit?
+## Why not Refit?
 
-Every developer who finds this asks the same question. Here's the honest comparison:
+Refit is good. If you're already using it, you probably don't need this.
 
-| | **Stitch** | **Refit** |
-|---|---|---|
-| **When mistakes surface** | Compile time — route token mismatches, invalid bindings, missing verb attributes all fail the build | Runtime — wrong route names, bad parameter binding, missing attributes throw when you call the method |
-| **Generated code** | Real `.g.cs` file in your project tree — readable, navigable, breakpointable | Emitted into memory by a source generator — you can't open it, step through it, or grep it |
-| **Diagnostics** | Roslyn analyzer with 9 error codes and a code fix for route typos | Limited compile-time validation |
-| **Error model** | `StitchHttpException` with status, headers, and body; or `StitchResult<T, E>` for typed failures | `ApiException` at runtime |
-| **Response headers** | `Task<StitchResponse<T>>` returns body + headers (pagination cursors, rate limits) | Requires custom `ApiResponse<T>` wrapper or manual `HttpResponseMessage` |
-| **File uploads** | `[Multipart]` attribute on `Stream` / `IFormFile` parameters | `[Multipart]` attribute (similar) |
-| **Interceptors** | `IStitchInterceptor` pipeline — before/after hooks without writing a `DelegatingHandler` | `DelegatingHandler` only |
-| **Maturity** | Early — focused on compile-time safety and debuggability | Battle-tested, large ecosystem, more auth/serialization plugins |
+The thing that bugged me about Refit was that it finds your mistakes when the app runs, not when you build it. Typo a route token? Runtime. Forget a verb attribute? Runtime. Put `[Body]` on a DELETE? Runtime, probably in prod. Stitch makes all of those build errors instead. There's an analyzer with 9 diagnostics and a lightbulb fix for the most common one.
 
-Refit is a solid choice if you want maximum ecosystem coverage today. Stitch is the better fit if you want compile-time guarantees, generated code you can actually read, and diagnostics that catch route typos before you deploy.
+The generated code being a real file matters too. Refit generates into memory and you can't touch it. With Stitch you can open `StitchProductsApi.g.cs`, read exactly what it does on the wire, and put a breakpoint in it. Whether that's important to you is up to you, but I found it useful every single time something went wrong at the HTTP level.
+
+The honest downside: this is newer and has less of everything. No Newtonsoft plugin, no OAuth2 helpers, nothing the Refit ecosystem took years to build. If you need those, use Refit.
 
 ---
 
 ## Packages
-
-All four packages are published on [NuGet](https://www.nuget.org/packages/Stitch.Core). Install with `dotnet add package`.
 
 | Package | Target | Purpose |
 |---|---|---|
@@ -165,7 +156,7 @@ internal sealed class StitchProductsApi : IProductsApi
 }
 ```
 
-Straightforward generated code, no runtime magic. You can read it, step through it, and understand exactly what's happening on the wire.
+That's all it is. No proxies, no reflection at call time. You can read it, step through it, and there's nothing hiding behind it.
 
 ---
 
@@ -183,13 +174,13 @@ Stitch does the obvious thing by default:
 | `[Multipart("field")]` on `Stream` / `IFormFile` | Multipart file part |
 | `[Multipart("field")]` on simple type | Multipart form field |
 
-`[Body]` on a POST is optional — if you have a complex type and there's no ambiguity, it gets inferred. `[Query]` and `[Header]` are always explicit. If a situation is genuinely ambiguous, you get a compiler error instead of silent wrong behavior.
+`[Body]` on a POST is optional. If you have a complex type and there's no ambiguity, it gets inferred. `[Query]` and `[Header]` are always explicit. If a situation is genuinely ambiguous, you get a compiler error instead of silent wrong behavior.
 
 ---
 
 ## File uploads
 
-Mark a method with `[Multipart]` and bind file parameters with `[Multipart("fieldName")]`:
+Mark the method with `[Multipart]` and tag each parameter with `[Multipart("fieldName")]`:
 
 ```csharp
 [Multipart]
@@ -200,13 +191,15 @@ Task<UploadResult> UploadAsync(
     CancellationToken ct = default);
 ```
 
-`Stream` and `IFormFile` are sent as file parts. Simple types are sent as form fields. You cannot mix `[Body]` and `[Multipart]` on the same method — the analyzer catches that at compile time (ST008).
+`Stream` and `IFormFile` become file parts; simple types become form fields. Mixing `[Body]` and `[Multipart]` on the same method is a compile error (ST008).
+
+Note: plain `Stream` parameters use the field name as the filename. If you need a real filename, use `IFormFile` instead.
 
 ---
 
 ## Response headers
 
-When you need headers back — pagination cursors, rate limit info, ETags — return `Task<StitchResponse<T>>` instead of `Task<T>`:
+If you need headers back alongside the body (pagination cursors, rate limit info, ETags), return `Task<StitchResponse<T>>`:
 
 ```csharp
 [Get("/products")]
@@ -219,17 +212,14 @@ Task<StitchResponse<PagedResult<ProductDto>>> ListProductsAsync(
 var response = await productsApi.ListProductsAsync(page: 1);
 
 var products = response.Value;
-var total = response.Headers["X-Total-Count"].First();
-var nextCursor = response.Headers.TryGetValue("X-Next-Cursor", out var cursors)
-    ? cursors.First()
-    : null;
+var nextCursor = response.Headers.TryGetValue("X-Next-Cursor", out var v) ? v.First() : null;
 ```
 
-`StitchResponse<T>` includes the deserialized body, the HTTP status code, and all response headers (including content headers like `Content-Type`).
+`StitchResponse<T>` carries the deserialized body, the status code, and all response headers including content headers.
 
 ---
 
-## Request interceptors
+## Interceptors
 
 Hook into every request without writing a `DelegatingHandler`:
 
@@ -237,20 +227,20 @@ Hook into every request without writing a `DelegatingHandler`:
 builder.Services.AddStitchClient<IProductsApi>(opts =>
 {
     opts.UseInterceptor(
-        onRequest: async (req, ct) =>
+        onRequest: (req, ct) =>
         {
             logger.LogDebug("→ {Method} {Url}", req.Method, req.RequestUri);
+            return ValueTask.CompletedTask;
         },
-        onResponse: async (req, res, ct) =>
+        onResponse: (req, res, ct) =>
         {
             logger.LogDebug("← {Status}", res.StatusCode);
+            return ValueTask.CompletedTask;
         });
 });
 ```
 
-For reusable logic, implement `IStitchInterceptor` and register with `opts.UseInterceptor(myInterceptor)`.
-
-Interceptors run inside the generated client — after the request is built (URL, body, headers) but before `SendAsync`, and again after the response arrives. Auth handlers still run at the `HttpClient` pipeline level.
+For anything reusable, implement `IStitchInterceptor` and pass the instance in instead. They run inside the generated client after the request is built but before it goes out, and again when the response comes back. Auth handlers you've added still run at the `HttpClient` level — interceptors are one layer inside that.
 
 ---
 
@@ -310,7 +300,7 @@ builder.Services
 
 ## Error handling
 
-Non-2xx responses throw `StitchHttpException` by default. It has the status code, headers, and the raw body string so you don't need an extra `ReadAsStringAsync` call to log what went wrong.
+Non-2xx responses throw `StitchHttpException` by default. It has the status code, the headers, and the raw body string already read, so you're not doing another `ReadAsStringAsync` in your catch block just to log what actually happened.
 
 ```csharp
 catch (StitchHttpException ex)
@@ -319,7 +309,7 @@ catch (StitchHttpException ex)
 }
 ```
 
-If the API returns a structured error body, use `StitchResult<T, E>` instead of throwing:
+If the API returns a structured error body, use `StitchResult<T, E>` to handle success and failure without throwing:
 
 ```csharp
 [Get("/products/{id}")]
@@ -355,7 +345,7 @@ builder.Services.AddStitchClient<IProductsApi>(opts =>
 // Static bearer
 opts.UseBearer("my-token");
 
-// Dynamic bearer, called per request
+// Dynamic bearer, resolved per request
 opts.UseBearer(async sp => await sp.GetRequiredService<ITokenService>().GetAsync());
 
 // API key header
@@ -378,20 +368,18 @@ dotnet build
 dotnet test
 ```
 
-The test suite (`tests/Stitch.Tests`) runs integration tests against a WireMock HTTP server — covering route binding, query params, JSON bodies, multipart uploads, auth headers, `StitchResult`, `StitchResponse`, interceptors, and error handling.
-
 Requires .NET 8 SDK or later.
 
 ### Publishing to NuGet
 
-Packages publish automatically when you push a version tag:
+Push a version tag and CI handles the rest:
 
 ```bash
 git tag v0.1.2
 git push origin v0.1.2
 ```
 
-CI builds, runs tests, packs all four packages, and pushes to [nuget.org](https://www.nuget.org/packages/Stitch.Core). 
+Requires the `NUGET_API_KEY` secret set in GitHub Actions.
 
 ---
 
