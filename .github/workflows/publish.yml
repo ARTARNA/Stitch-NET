@@ -24,6 +24,9 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release
 
+      - name: Test
+        run: dotnet test --configuration Release --no-build
+
       - name: Pack
         run: |
           dotnet pack src/Stitch.Core/Stitch.Core.csproj \

@@ -44,8 +44,10 @@ internal static class Parser
 
             var (verb, path) = verbAttr.Value;
             var parameters = ParseParameters(method, path, usings);
-            var (returnType, isVoid, isStitchResult, valueType, errorType) =
+            var (returnType, isVoid, isStitchResult, valueType, errorType, isStitchResponse, responseValueType) =
                 ParseReturnType(method, usings);
+            var isMultipart = method.GetAttributes().Any(a => a.AttributeClass?.Name == "MultipartAttribute")
+                || parameters.Any(p => p.Source == BindingSource.Multipart);
 
             methods.Add(new MethodModel(
                 method.Name,
@@ -56,6 +58,9 @@ internal static class Parser
                 isStitchResult,
                 valueType,
                 errorType,
+                isStitchResponse,
+                responseValueType,
+                isMultipart,
                 parameters));
         }
 
@@ -98,6 +103,8 @@ internal static class Parser
 
             string? headerName = null;
             string? queryAlias = null;
+            string? multipartName = null;
+            var isFile = IsFileType(param.Type);
 
             if (source == BindingSource.Header)
             {
@@ -113,6 +120,14 @@ internal static class Parser
                     ? queryAttr.ConstructorArguments[0].Value as string
                     : null;
             }
+            else if (source == BindingSource.Multipart)
+            {
+                var multipartAttr = param.GetAttributes()
+                    .FirstOrDefault(a => a.AttributeClass?.Name == "MultipartAttribute");
+                multipartName = multipartAttr?.ConstructorArguments.Length > 0
+                    ? multipartAttr.ConstructorArguments[0].Value as string
+                    : param.Name;
+            }
 
             result.Add(new ParameterModel(
                 param.Name,
@@ -120,6 +135,8 @@ internal static class Parser
                 source,
                 headerName,
                 queryAlias,
+                multipartName,
+                isFile,
                 param.Type.NullableAnnotation == NullableAnnotation.Annotated,
                 param.HasExplicitDefaultValue));
         }
@@ -142,7 +159,11 @@ internal static class Parser
             if (name == "BodyAttribute") return BindingSource.Body;
             if (name == "QueryAttribute") return BindingSource.Query;
             if (name == "HeaderAttribute") return BindingSource.Header;
+            if (name == "MultipartAttribute") return BindingSource.Multipart;
         }
+
+        if (IsFileType(param.Type))
+            return BindingSource.Multipart;
 
         if (routeTokens.Contains(param.Name))
             return BindingSource.Route;
@@ -151,7 +172,9 @@ internal static class Parser
             || param.Type.TypeKind == TypeKind.Interface
             || param.Type.TypeKind == TypeKind.Struct && !IsSimpleValueType(param.Type);
 
-        if (isComplex && (method.GetAttributes().Any(a =>
+        var isMultipartMethod = method.GetAttributes().Any(a => a.AttributeClass?.Name == "MultipartAttribute");
+
+        if (isComplex && !isMultipartMethod && (method.GetAttributes().Any(a =>
             a.AttributeClass?.Name is "PostAttribute" or "PutAttribute" or "PatchAttribute")))
             return BindingSource.Body;
 
@@ -183,37 +206,55 @@ internal static class Parser
             || type.Name == "TimeOnly";
     }
 
+    private static bool IsFileType(ITypeSymbol type)
+    {
+        var display = type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+        return display is "Stream" or "IFormFile"
+            || type.Name is "Stream" or "IFormFile"
+            || type.AllInterfaces.Any(i => i.Name == "IFormFile");
+    }
+
     private static (string returnType, bool isVoid, bool isStitchResult,
-        string? valueType, string? errorType) ParseReturnType(
+        string? valueType, string? errorType, bool isStitchResponse, string? responseValueType) ParseReturnType(
         IMethodSymbol method,
         HashSet<string> usings)
     {
         var returnType = method.ReturnType;
 
         if (returnType is not INamedTypeSymbol namedReturn)
-            return (GetTypeName(returnType, usings), true, false, null, null);
+            return (GetTypeName(returnType, usings), true, false, null, null, false, null);
 
         // Unwrap Task<T> or ValueTask<T>
         var outerName = namedReturn.OriginalDefinition.ToDisplayString();
         if (outerName is "System.Threading.Tasks.Task"
             or "System.Threading.Tasks.ValueTask")
-            return ("void_task", true, false, null, null);
+            return ("void_task", true, false, null, null, false, null);
 
         if (outerName is not ("System.Threading.Tasks.Task<TResult>"
             or "System.Threading.Tasks.ValueTask<TResult>"))
-            return (GetTypeName(returnType, usings), false, false, null, null);
+            return (GetTypeName(returnType, usings), false, false, null, null, false, null);
 
         var innerType = namedReturn.TypeArguments[0];
-        if (innerType is INamedTypeSymbol innerNamed
-            && innerNamed.OriginalDefinition.ToDisplayString() == "Stitch.Core.StitchResult<TValue, TError>")
+        if (innerType is INamedTypeSymbol innerNamed)
         {
-            var vt = GetTypeName(innerNamed.TypeArguments[0], usings);
-            var et = GetTypeName(innerNamed.TypeArguments[1], usings);
-            var fullReturn = GetTypeName(returnType, usings);
-            return (fullReturn, false, true, vt, et);
+            var innerDef = innerNamed.OriginalDefinition.ToDisplayString();
+            if (innerDef == "Stitch.Core.StitchResult<TValue, TError>")
+            {
+                var vt = GetTypeName(innerNamed.TypeArguments[0], usings);
+                var et = GetTypeName(innerNamed.TypeArguments[1], usings);
+                var fullReturn = GetTypeName(returnType, usings);
+                return (fullReturn, false, true, vt, et, false, null);
+            }
+
+            if (innerDef == "Stitch.Core.StitchResponse<T>")
+            {
+                var vt = GetTypeName(innerNamed.TypeArguments[0], usings);
+                var fullReturn = GetTypeName(returnType, usings);
+                return (fullReturn, false, false, null, null, true, vt);
+            }
         }
 
-        return (GetTypeName(returnType, usings), false, false, null, null);
+        return (GetTypeName(returnType, usings), false, false, null, null, false, null);
     }
 
     private static string GetTypeName(ITypeSymbol type, HashSet<string> usings)

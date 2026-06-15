@@ -6,4 +6,5 @@ public sealed class StitchOptions
 {
     public IStitchSerializer Serializer { get; set; } = SystemTextJsonSerializer.Instance;
     public IStitchErrorHandler ErrorHandler { get; set; } = DefaultErrorHandler.Instance;
+    public IReadOnlyList<IStitchInterceptor> Interceptors { get; set; } = [];
 }

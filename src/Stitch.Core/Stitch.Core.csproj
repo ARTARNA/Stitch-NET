@@ -9,7 +9,7 @@
     <AssemblyName>Stitch.Core</AssemblyName>
 
     <PackageId>Stitch.Core</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.2</Version>
     <Authors>ARTARNA</Authors>
     <Description>Attributes and base types for defining Stitch HTTP clients. The only package a contracts library needs to reference.</Description>
     <PackageTags>http;client;roslyn;source-generator;rest</PackageTags>

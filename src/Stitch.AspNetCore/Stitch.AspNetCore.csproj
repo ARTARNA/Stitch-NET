@@ -9,7 +9,7 @@
     <AssemblyName>Stitch.AspNetCore</AssemblyName>
 
     <PackageId>Stitch.AspNetCore</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.2</Version>
     <Authors>ARTARNA</Authors>
     <Description>ASP.NET Core integration for Stitch. Provides AddStitchClient&lt;T&gt;, HttpClientFactory registration, and built-in auth handlers (bearer, API key, basic).</Description>
     <PackageTags>http;client;aspnetcore;httpclientfactory;rest</PackageTags>

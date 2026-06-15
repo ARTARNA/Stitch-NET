@@ -11,7 +11,7 @@
     <AssemblyName>Stitch.Analyzers</AssemblyName>
 
     <PackageId>Stitch.Analyzers</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.2</Version>
     <Authors>ARTARNA</Authors>
     <Description>Roslyn analyzer and code fixes for Stitch. Catches bad interface definitions (ST001-ST007) at compile time before the generator runs. Add as an analyzer reference.</Description>
     <PackageTags>http;client;roslyn;analyzer;rest</PackageTags>

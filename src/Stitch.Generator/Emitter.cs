@@ -20,7 +20,10 @@ internal static class Emitter
         sb.AppendLine();
         sb.AppendLine("using System;");
         sb.AppendLine("using System.Collections.Generic;");
+        sb.AppendLine("using System.Linq;");
+        sb.AppendLine("using System.Net;");
         sb.AppendLine("using System.Net.Http;");
+        sb.AppendLine("using System.Net.Http.Headers;");
         sb.AppendLine("using System.Threading;");
         sb.AppendLine("using System.Threading.Tasks;");
         sb.AppendLine("using Stitch.Core;");
@@ -78,9 +81,14 @@ internal static class Emitter
 
         sb.AppendLine($"{indent}    using var __req = new HttpRequestMessage(HttpMethod.{method.Verb}, {url});");
 
-        var bodyParam = method.Parameters.FirstOrDefault(p => p.Source == BindingSource.Body);
-        if (bodyParam != null)
-            sb.AppendLine($"{indent}    __req.Content = _opts.Serializer.Serialize({bodyParam.Name});");
+        if (method.IsMultipart)
+            EmitMultipartContent(sb, method, indent + "    ");
+        else
+        {
+            var bodyParam = method.Parameters.FirstOrDefault(p => p.Source == BindingSource.Body);
+            if (bodyParam != null)
+                sb.AppendLine($"{indent}    __req.Content = _opts.Serializer.Serialize({bodyParam.Name});");
+        }
 
         foreach (var p in method.Parameters.Where(p => p.Source == BindingSource.Header))
         {
@@ -90,11 +98,19 @@ internal static class Emitter
             sb.AppendLine($"{indent}    if ({p.Name} != null) __req.Headers.TryAddWithoutValidation(\"{p.HeaderName}\", {value});");
         }
 
+        EmitInterceptorCalls(sb, indent + "    ", ctArg, beforeSend: true);
+
         sb.AppendLine($"{indent}    using var __res = await _http.SendAsync(__req, HttpCompletionOption.ResponseHeadersRead, {ctArg});");
+
+        EmitInterceptorCalls(sb, indent + "    ", ctArg, beforeSend: false);
 
         if (method.IsStitchResult)
         {
             EmitStitchResultBranch(sb, method, ctArg, indent + "    ");
+        }
+        else if (method.IsStitchResponse)
+        {
+            EmitStitchResponseBranch(sb, method, ctArg, indent + "    ");
         }
         else
         {
@@ -110,6 +126,59 @@ internal static class Emitter
         sb.AppendLine($"{indent}}}");
     }
 
+    private static void EmitInterceptorCalls(StringBuilder sb, string indent, string ctArg, bool beforeSend)
+    {
+        if (beforeSend)
+        {
+            sb.AppendLine($"{indent}foreach (var __interceptor in _opts.Interceptors)");
+            sb.AppendLine($"{indent}    await __interceptor.OnRequestAsync(__req, {ctArg});");
+        }
+        else
+        {
+            sb.AppendLine($"{indent}foreach (var __interceptor in _opts.Interceptors)");
+            sb.AppendLine($"{indent}    await __interceptor.OnResponseAsync(__req, __res, {ctArg});");
+        }
+    }
+
+    private static void EmitMultipartContent(StringBuilder sb, MethodModel method, string indent)
+    {
+        var multipartParams = method.Parameters
+            .Where(p => p.Source == BindingSource.Multipart)
+            .ToList();
+
+        sb.AppendLine($"{indent}var __multipart = new MultipartFormDataContent();");
+        foreach (var p in multipartParams)
+        {
+            var fieldName = p.MultipartName ?? p.Name;
+            if (p.IsFile)
+            {
+                sb.AppendLine($"{indent}if ({p.Name} != null)");
+                sb.AppendLine($"{indent}{{");
+                if (p.TypeName == "IFormFile" || p.TypeName.EndsWith(".IFormFile"))
+                {
+                    sb.AppendLine($"{indent}    var __fileContent = new StreamContent({p.Name}.OpenReadStream());");
+                    sb.AppendLine($"{indent}    if (!string.IsNullOrEmpty({p.Name}.ContentType))");
+                    sb.AppendLine($"{indent}        __fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse({p.Name}.ContentType);");
+                    sb.AppendLine($"{indent}    __multipart.Add(__fileContent, \"{fieldName}\", {p.Name}.FileName);");
+                }
+                else
+                {
+                    sb.AppendLine($"{indent}    __multipart.Add(new StreamContent({p.Name}), \"{fieldName}\", \"{fieldName}\");");
+                }
+                sb.AppendLine($"{indent}}}");
+            }
+            else
+            {
+                if (p.IsNullable)
+                    sb.AppendLine($"{indent}if ({p.Name} != null) __multipart.Add(new StringContent({p.Name}.ToString()!), \"{fieldName}\");");
+                else
+                    sb.AppendLine($"{indent}__multipart.Add(new StringContent({p.Name}.ToString()!), \"{fieldName}\");");
+            }
+        }
+
+        sb.AppendLine($"{indent}__req.Content = __multipart;");
+    }
+
     private static void EmitStitchResultBranch(
         StringBuilder sb, MethodModel method, string ctArg, string indent)
     {
@@ -122,6 +191,28 @@ internal static class Emitter
         sb.AppendLine($"{indent}}}");
         sb.AppendLine($"{indent}var __error = await _opts.Serializer.DeserializeAsync<{et}>(__res.Content, {ctArg});");
         sb.AppendLine($"{indent}return StitchResult<{vt}, {et}>.Failure(__error!);");
+    }
+
+    private static void EmitStitchResponseBranch(
+        StringBuilder sb, MethodModel method, string ctArg, string indent)
+    {
+        var vt = method.StitchResponseValueType!;
+        sb.AppendLine($"{indent}await _opts.ErrorHandler.EnsureSuccessAsync(__res, {ctArg});");
+        sb.AppendLine($"{indent}var __value = (await _opts.Serializer.DeserializeAsync<{vt}>(__res.Content, {ctArg}))!;");
+        sb.AppendLine($"{indent}var __headers = new Dictionary<string, IEnumerable<string>>();");
+        sb.AppendLine($"{indent}foreach (var __header in __res.Headers)");
+        sb.AppendLine($"{indent}    __headers[__header.Key] = __header.Value;");
+        sb.AppendLine($"{indent}if (__res.Content?.Headers != null)");
+        sb.AppendLine($"{indent}{{");
+        sb.AppendLine($"{indent}    foreach (var __header in __res.Content.Headers)");
+        sb.AppendLine($"{indent}        __headers[__header.Key] = __header.Value;");
+        sb.AppendLine($"{indent}}}");
+        sb.AppendLine($"{indent}return new StitchResponse<{vt}>");
+        sb.AppendLine($"{indent}{{");
+        sb.AppendLine($"{indent}    Value = __value,");
+        sb.AppendLine($"{indent}    StatusCode = __res.StatusCode,");
+        sb.AppendLine($"{indent}    Headers = __headers");
+        sb.AppendLine($"{indent}}};");
     }
 
     private static string BuildUrl(MethodModel method, StringBuilder sb, string indent)

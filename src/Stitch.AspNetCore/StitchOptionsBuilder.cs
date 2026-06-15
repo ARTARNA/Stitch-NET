@@ -7,6 +7,7 @@ public sealed class StitchOptionsBuilder
     private string? _baseAddress;
     private IStitchSerializer? _serializer;
     private IStitchErrorHandler? _errorHandler;
+    private readonly List<IStitchInterceptor> _interceptors = [];
 
     internal List<Func<IServiceProvider, DelegatingHandler>> HandlerFactories { get; } = [];
 
@@ -65,11 +66,26 @@ public sealed class StitchOptionsBuilder
         return this;
     }
 
+    public StitchOptionsBuilder UseInterceptor(IStitchInterceptor interceptor)
+    {
+        _interceptors.Add(interceptor);
+        return this;
+    }
+
+    public StitchOptionsBuilder UseInterceptor(
+        Func<HttpRequestMessage, CancellationToken, ValueTask> onRequest,
+        Func<HttpRequestMessage, HttpResponseMessage, CancellationToken, ValueTask>? onResponse = null)
+    {
+        _interceptors.Add(new DelegateStitchInterceptor(onRequest, onResponse));
+        return this;
+    }
+
     internal StitchOptions Build()
     {
         var opts = new StitchOptions();
         if (_serializer != null) opts.Serializer = _serializer;
         if (_errorHandler != null) opts.ErrorHandler = _errorHandler;
+        if (_interceptors.Count > 0) opts.Interceptors = _interceptors.ToArray();
         return opts;
     }
 }

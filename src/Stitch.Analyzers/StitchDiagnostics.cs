@@ -45,11 +45,11 @@ internal static class Diagnostics
     public static readonly DiagnosticDescriptor ST005_InvalidReturnType = new(
         id: "ST005",
         title: "Invalid return type",
-        messageFormat: "'{0}' is not a valid return type — must be Task, Task<T>, or ValueTask<T>",
+        messageFormat: "'{0}' is not a valid return type — must be Task, Task<T>, ValueTask, or ValueTask<T>",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true,
-        description: "All interface methods on a [StitchClient] must return Task, Task<T>, or ValueTask<T>.");
+        description: "All interface methods on a [StitchClient] must return Task, Task<T>, ValueTask, or ValueTask<T>.");
 
     public static readonly DiagnosticDescriptor ST006_NotAnInterface = new(
         id: "ST006",
@@ -68,4 +68,22 @@ internal static class Diagnostics
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true,
         description: "Every method on a [StitchClient] interface must declare exactly one HTTP verb attribute.");
+
+    public static readonly DiagnosticDescriptor ST008_BodyAndMultipart = new(
+        id: "ST008",
+        title: "[Body] and [Multipart] on the same method",
+        messageFormat: "Method '{0}' cannot have both [Body] and [Multipart] parameters",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "A method must use either JSON body or multipart form data, not both.");
+
+    public static readonly DiagnosticDescriptor ST009_MultipartOnGetOrDelete = new(
+        id: "ST009",
+        title: "[Multipart] on GET or DELETE method",
+        messageFormat: "[Multipart] is not valid on {0} methods",
+        category: Category,
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "Multipart form uploads are only valid on POST, PUT, and PATCH methods.");
 }

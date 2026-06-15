@@ -10,7 +10,7 @@
     <AssemblyName>Stitch.Generator</AssemblyName>
 
     <PackageId>Stitch.Generator</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.2</Version>
     <Authors>ARTARNA</Authors>
     <Description>Roslyn source generator for Stitch. Emits a concrete HttpClient implementation from a [StitchClient] interface at compile time. Add as an analyzer reference — zero runtime footprint.</Description>
     <PackageTags>http;client;roslyn;source-generator;analyzer;rest</PackageTags>

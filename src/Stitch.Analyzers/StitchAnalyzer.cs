@@ -27,7 +27,9 @@ public sealed class StitchAnalyzer : DiagnosticAnalyzer
             Diagnostics.ST004_MultipleBodyParameters,
             Diagnostics.ST005_InvalidReturnType,
             Diagnostics.ST006_NotAnInterface,
-            Diagnostics.ST007_MissingHttpVerb);
+            Diagnostics.ST007_MissingHttpVerb,
+            Diagnostics.ST008_BodyAndMultipart,
+            Diagnostics.ST009_MultipartOnGetOrDelete);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -96,6 +98,7 @@ public sealed class StitchAnalyzer : DiagnosticAnalyzer
 
         ValidateRouteTokens(ctx, method, routeTokens, parameterNames, location);
         ValidateBodyParameters(ctx, method, verbAttr, location);
+        ValidateMultipartParameters(ctx, method, verbAttr, location);
     }
 
     private static void ValidateReturnType(
@@ -111,6 +114,7 @@ public sealed class StitchAnalyzer : DiagnosticAnalyzer
 
         var outer = returnType.OriginalDefinition.ToDisplayString();
         if (outer is "System.Threading.Tasks.Task"
+            or "System.Threading.Tasks.ValueTask"
             or "System.Threading.Tasks.Task<TResult>"
             or "System.Threading.Tasks.ValueTask<TResult>")
             return;
@@ -150,7 +154,7 @@ public sealed class StitchAnalyzer : DiagnosticAnalyzer
                 continue;
 
             var hasExplicitBinding = param.GetAttributes().Any(a =>
-                a.AttributeClass?.Name is "BodyAttribute" or "QueryAttribute" or "HeaderAttribute");
+                a.AttributeClass?.Name is "BodyAttribute" or "QueryAttribute" or "HeaderAttribute" or "MultipartAttribute");
             if (hasExplicitBinding)
                 continue;
 
@@ -205,6 +209,99 @@ public sealed class StitchAnalyzer : DiagnosticAnalyzer
             ctx.ReportDiagnostic(Diagnostic.Create(
                 Diagnostics.ST004_MultipleBodyParameters, location, method.Name));
         }
+    }
+
+    private static void ValidateMultipartParameters(
+        SymbolAnalysisContext ctx,
+        IMethodSymbol method,
+        AttributeData verbAttr,
+        Location? location)
+    {
+        var multipartParams = method.Parameters
+            .Where(p => p.GetAttributes().Any(a => a.AttributeClass?.Name == "MultipartAttribute")
+                || IsFileParameter(p))
+            .ToList();
+
+        var hasMultipart = method.GetAttributes().Any(a => a.AttributeClass?.Name == "MultipartAttribute")
+            || multipartParams.Count > 0;
+
+        if (!hasMultipart)
+            return;
+
+        if (BodyUnsafeVerbs.Contains(verbAttr.AttributeClass?.Name!))
+        {
+            var verbName = verbAttr.AttributeClass!.Name.Replace("Attribute", "").ToUpperInvariant();
+            ctx.ReportDiagnostic(Diagnostic.Create(
+                Diagnostics.ST009_MultipartOnGetOrDelete, location, verbName));
+        }
+
+        var bodyParams = method.Parameters
+            .Where(p => p.GetAttributes().Any(a => a.AttributeClass?.Name == "BodyAttribute")
+                || IsInferredBodyParameter(p, method, verbAttr, multipartParams))
+            .ToList();
+
+        if (bodyParams.Count > 0)
+        {
+            ctx.ReportDiagnostic(Diagnostic.Create(
+                Diagnostics.ST008_BodyAndMultipart, location, method.Name));
+        }
+    }
+
+    private static bool IsInferredBodyParameter(
+        IParameterSymbol param,
+        IMethodSymbol method,
+        AttributeData verbAttr,
+        List<IParameterSymbol> multipartParams)
+    {
+        if (multipartParams.Contains(param))
+            return false;
+
+        if (param.GetAttributes().Any(a => a.AttributeClass?.Name is "QueryAttribute" or "HeaderAttribute"))
+            return false;
+
+        if (param.Type.OriginalDefinition.ToDisplayString() == "System.Threading.CancellationToken")
+            return false;
+
+        if (IsFileParameter(param))
+            return false;
+
+        var isComplex = param.Type.TypeKind is TypeKind.Class or TypeKind.Interface
+            || param.Type.TypeKind == TypeKind.Struct && !IsSimpleValueType(param.Type);
+
+        return isComplex && verbAttr.AttributeClass?.Name is "PostAttribute" or "PutAttribute" or "PatchAttribute";
+    }
+
+    private static bool IsFileParameter(IParameterSymbol param)
+    {
+        var typeName = param.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+        return typeName is "Stream" or "IFormFile"
+            || param.Type.Name is "Stream" or "IFormFile"
+            || param.Type.AllInterfaces.Any(i => i.Name == "IFormFile");
+    }
+
+    private static bool IsSimpleValueType(ITypeSymbol type)
+    {
+        return type.SpecialType
+            is SpecialType.System_Boolean
+            or SpecialType.System_Byte
+            or SpecialType.System_SByte
+            or SpecialType.System_Int16
+            or SpecialType.System_UInt16
+            or SpecialType.System_Int32
+            or SpecialType.System_UInt32
+            or SpecialType.System_Int64
+            or SpecialType.System_UInt64
+            or SpecialType.System_Single
+            or SpecialType.System_Double
+            or SpecialType.System_Decimal
+            or SpecialType.System_Char
+            or SpecialType.System_String
+            || type.Name == "Guid"
+            || type.Name == "DateTime"
+            || type.Name == "DateTimeOffset"
+            || type.Name == "TimeSpan"
+            || type.Name == "DateOnly"
+            || type.Name == "TimeOnly";
     }
 
     private static int LevenshteinDistance(string a, string b)

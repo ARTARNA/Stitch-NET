@@ -4,7 +4,7 @@ namespace Stitch.Generator;
 
 internal enum HttpVerb { Get, Post, Put, Patch, Delete }
 
-internal enum BindingSource { Route, Query, Body, Header, CancellationToken }
+internal enum BindingSource { Route, Query, Body, Header, Multipart, CancellationToken }
 
 internal sealed record ParameterModel(
     string Name,
@@ -12,6 +12,8 @@ internal sealed record ParameterModel(
     BindingSource Source,
     string? HeaderName,
     string? QueryAlias,
+    string? MultipartName,
+    bool IsFile,
     bool IsNullable,
     bool HasDefault);
 
@@ -24,6 +26,9 @@ internal sealed record MethodModel(
     bool IsStitchResult,
     string? StitchResultValueType,
     string? StitchResultErrorType,
+    bool IsStitchResponse,
+    string? StitchResponseValueType,
+    bool IsMultipart,
     IReadOnlyList<ParameterModel> Parameters);
 
 internal sealed record ClientModel(
